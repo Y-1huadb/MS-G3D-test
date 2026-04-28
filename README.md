@@ -17,8 +17,8 @@ PyTorch implementation of "Disentangling and Unifying Graph Convolutions for Ske
 ## Dependencies
 
 - Python >= 3.6
-- PyTorch >= 1.2.0
-- [NVIDIA Apex](https://github.com/NVIDIA/apex) (auto mixed precision training)
+- PyTorch >= 1.10.0
+- PyTorch AMP (`torch.amp`) for mixed precision training
 - PyYAML, tqdm, tensorboardX
 
 ## Data Preparation
@@ -122,7 +122,7 @@ python3 main.py
   --config <config file>
   --work-dir <place to keep things (weights, checkpoints, logs)>
   --device <GPU IDs to use>
-  --half   # Mixed precision training with NVIDIA Apex (default O1) for GPUs ~11GB memory
+  --half   # Mixed precision training with native PyTorch AMP for GPUs ~11GB memory
   [--base-lr <base learning rate>]
   [--batch-size <batch size>]
   [--weight-decay <weight decay>]
@@ -179,13 +179,7 @@ python3 main.py
   - 4 GPUs: `--base-lr 0.1 --device 0 1 2 3 --batch-size 64 --forward-batch-size 64`
 
 - Unfortunately, different PyTorch/CUDA versions & GPU setups can cause different levels of memory usage, and so you may experience out of memory (OOM) on some machines but not others
-  - 1080Ti GPUs with `--half` and `--amp-opt-level 1` (default) are relatively more stable
-
-- If OOM occurs, try using Apex O2 by setting `--amp-opt-level 2`. However, note that
-  - NVIDIA Apex does not yet support `nn.DataParallel` for O2
-    - https://github.com/NVIDIA/apex/issues/227#issuecomment-566843218
-    - This means you may need to train on a single GPU when using O2
-  - It may also impact the stability of training and/or the final performance
+  - 1080Ti GPUs with `--half` are relatively more stable
 
 - Default hyperparameters are stored in the config files; you can tune them & add extra training techniques to boost performance
 

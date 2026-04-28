@@ -18,7 +18,7 @@ import torch.optim as optim
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import MultiStepLR
-import apex
+from torch.amp import autocast, GradScaler
 
 from utils import count_params, import_class
 
@@ -138,11 +138,6 @@ def get_parser():
         '--half',
         action='store_true',
         help='Use half-precision (FP16) training')
-    parser.add_argument(
-        '--amp-opt-level',
-        type=int,
-        default=1,
-        help='NVIDIA Apex AMP optimization level')
 
     parser.add_argument(
         '--base-lr',
@@ -248,6 +243,7 @@ class Processor():
 
         self.load_model()
         self.load_param_groups()
+        self.scaler = GradScaler('cuda', enabled=self.arg.half)
         self.load_optimizer()
         self.load_lr_scheduler()
         self.load_data()
@@ -261,13 +257,6 @@ class Processor():
             self.print_log('*************************************')
             self.print_log('*** Using Half Precision Training ***')
             self.print_log('*************************************')
-            self.model, self.optimizer = apex.amp.initialize(
-                self.model,
-                self.optimizer,
-                opt_level=f'O{self.arg.amp_opt_level}'
-            )
-            if self.arg.amp_opt_level != 1:
-                self.print_log('[WARN] nn.DataParallel is not yet supported by amp_opt_level != "O1"')
 
         if type(self.arg.device) is list:
             if len(self.arg.device) > 1:
@@ -360,8 +349,16 @@ class Processor():
 
         # Load optimizer states if any
         if self.arg.checkpoint is not None:
+            checkpoint_states = torch.load(self.arg.checkpoint)
             self.print_log(f'Loading optimizer states from: {self.arg.checkpoint}')
-            self.optimizer.load_state_dict(torch.load(self.arg.checkpoint)['optimizer_states'])
+            self.optimizer.load_state_dict(checkpoint_states['optimizer_states'])
+            if self.arg.half:
+                scaler_states = checkpoint_states.get('scaler_states')
+                if scaler_states is not None:
+                    self.print_log(f'Loading GradScaler states from: {self.arg.checkpoint}')
+                    self.scaler.load_state_dict(scaler_states)
+                else:
+                    self.print_log('[WARN] No GradScaler states found in checkpoint; using fresh scaler state.')
             current_lr = self.optimizer.param_groups[0]['lr']
             self.print_log(f'Starting LR: {current_lr}')
             self.print_log(f'Starting WD1: {self.optimizer.param_groups[0]["weight_decay"]}')
@@ -443,6 +440,7 @@ class Processor():
             'epoch': epoch,
             'optimizer_states': self.optimizer.state_dict(),
             'lr_scheduler_states': self.lr_scheduler.state_dict(),
+            'scaler_states': self.scaler.state_dict(),
         }
 
         checkpoint_name = f'checkpoint-{epoch}-fwbz{self.arg.forward_batch_size}-{int(self.global_step)}.pt'
@@ -493,18 +491,18 @@ class Processor():
                 batch_data, batch_label = data[left:right], label[left:right]
 
                 # forward
-                output = self.model(batch_data)
-                if isinstance(output, tuple):
-                    output, l1 = output
-                    l1 = l1.mean()
-                else:
-                    l1 = 0
+                with autocast(device_type='cuda', enabled=self.arg.half):
+                    output = self.model(batch_data)
+                    if isinstance(output, tuple):
+                        output, l1 = output
+                        l1 = l1.mean()
+                    else:
+                        l1 = 0
 
-                loss = self.loss(output, batch_label) / splits
+                    loss = self.loss(output, batch_label) / splits
 
                 if self.arg.half:
-                    with apex.amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                        scaled_loss.backward()
+                    self.scaler.scale(loss).backward()
                 else:
                     loss.backward()
 
@@ -524,7 +522,11 @@ class Processor():
             #####################################
 
             # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 2)
-            self.optimizer.step()
+            if self.arg.half:
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                self.optimizer.step()
 
             # statistics
             self.lr = self.optimizer.param_groups[0]['lr']
@@ -577,13 +579,14 @@ class Processor():
                 for batch_idx, (data, label, index) in enumerate(process):
                     data = data.float().cuda(self.output_device)
                     label = label.long().cuda(self.output_device)
-                    output = self.model(data)
-                    if isinstance(output, tuple):
-                        output, l1 = output
-                        l1 = l1.mean()
-                    else:
-                        l1 = 0
-                    loss = self.loss(output, label)
+                    with autocast(device_type='cuda', enabled=self.arg.half):
+                        output = self.model(data)
+                        if isinstance(output, tuple):
+                            output, l1 = output
+                            l1 = l1.mean()
+                        else:
+                            l1 = 0
+                        loss = self.loss(output, label)
                     score_batches.append(output.data.cpu().numpy())
                     loss_values.append(loss.item())
 
