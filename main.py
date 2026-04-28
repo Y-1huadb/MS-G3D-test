@@ -178,7 +178,7 @@ def get_parser():
     parser.add_argument(
         '--forward-batch-size',
         type=int,
-        default=16,
+        default=8,
         help='Batch size during forward pass, must be factor of --batch-size')
     parser.add_argument(
         '--start-epoch',
