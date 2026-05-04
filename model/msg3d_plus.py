@@ -13,6 +13,12 @@ from model.ms_tcn import MultiScale_TemporalConv as MS_TCN
 from model.msg3d import MultiWindow_MS_G3D
 
 
+NUM_POINT_BY_LAYOUT = {
+    'openpose18': 18,
+    'coco17': 17,
+}
+
+
 class Model(nn.Module):
     def __init__(self,
                  num_class,
@@ -26,16 +32,31 @@ class Model(nn.Module):
                  use_part_branch=True,
                  num_part_scales=4,
                  part_branch_stages=(1, 2, 3),
+                 skeleton_layout='openpose18',
                  **kwargs):
         super(Model, self).__init__()
 
-        if use_part_branch and num_point != 18:
-            raise ValueError('Hierarchical part branch currently only supports OpenPose18 (num_point=18).')
+        if skeleton_layout not in NUM_POINT_BY_LAYOUT:
+            raise ValueError(
+                "Unsupported skeleton_layout={!r}. Expected one of: {}.".format(
+                    skeleton_layout, sorted(NUM_POINT_BY_LAYOUT.keys())
+                )
+            )
+
+        expected_num_point = NUM_POINT_BY_LAYOUT[skeleton_layout]
+        if num_point != expected_num_point:
+            raise ValueError(
+                'skeleton_layout={} expects num_point={}, but got {}.'.format(
+                    skeleton_layout, expected_num_point, num_point
+                )
+            )
 
         Graph = import_class(graph)
         A_binary = Graph().A_binary
         gcn_cls = DynamicMultiScale_GraphConv if use_dynamic_topology else MultiScale_GraphConv
+        part_graph = kwargs.get('part_graph', None)
 
+        self.skeleton_layout = skeleton_layout
         self.use_dynamic_topology = use_dynamic_topology
         self.use_part_branch = use_part_branch
         self.part_branch_stages = list(part_branch_stages)
@@ -72,9 +93,30 @@ class Model(nn.Module):
         self.tcn3 = MS_TCN(c3, c3)
 
         if self.use_part_branch:
-            self.part1 = HierarchicalPartBranch(c1, use_dynamic_topology=use_dynamic_topology, num_part_scales=num_part_scales)
-            self.part2 = HierarchicalPartBranch(c2, use_dynamic_topology=use_dynamic_topology, num_part_scales=num_part_scales)
-            self.part3 = HierarchicalPartBranch(c3, use_dynamic_topology=use_dynamic_topology, num_part_scales=num_part_scales)
+            self.part1 = HierarchicalPartBranch(
+                c1,
+                num_point=num_point,
+                skeleton_layout=skeleton_layout,
+                part_graph=part_graph,
+                use_dynamic_topology=use_dynamic_topology,
+                num_part_scales=num_part_scales,
+            )
+            self.part2 = HierarchicalPartBranch(
+                c2,
+                num_point=num_point,
+                skeleton_layout=skeleton_layout,
+                part_graph=part_graph,
+                use_dynamic_topology=use_dynamic_topology,
+                num_part_scales=num_part_scales,
+            )
+            self.part3 = HierarchicalPartBranch(
+                c3,
+                num_point=num_point,
+                skeleton_layout=skeleton_layout,
+                part_graph=part_graph,
+                use_dynamic_topology=use_dynamic_topology,
+                num_part_scales=num_part_scales,
+            )
         else:
             self.part1 = None
             self.part2 = None
@@ -82,6 +124,7 @@ class Model(nn.Module):
 
         self.fc = nn.Linear(c3, num_class)
 
+        print('[MSG3D-Plus] skeleton_layout = {}'.format(self.skeleton_layout))
         print('[MSG3D-Plus] use_dynamic_topology = {}'.format(self.use_dynamic_topology))
         print('[MSG3D-Plus] use_part_branch = {}'.format(self.use_part_branch))
         print('[MSG3D-Plus] part_branch_stages = {}'.format(self.part_branch_stages))
