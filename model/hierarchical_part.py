@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 sys.path.insert(0, '')
 
 import numpy as np
@@ -9,6 +9,7 @@ from graph.openpose18_part import AdjMatrixGraph
 from model.dynamic_ms_gcn import DynamicMultiScale_GraphConv
 from model.ms_gcn import MultiScale_GraphConv
 from model.ms_tcn import MultiScale_TemporalConv as MS_TCN
+from model.onnx_compatible_ops import apply_linear_to_last_dim
 
 
 OPENPOSE18_PARTS = [
@@ -51,7 +52,8 @@ class PartPooling(nn.Module):
     def forward(self, x):
         # x: (N, C, T, 18)
         # part_x: (N, C, T, 6)
-        return torch.einsum('pv,nctv->nctp', self.P.to(dtype=x.dtype), x)
+        P = self.P.to(dtype=x.dtype, device=x.device)
+        return apply_linear_to_last_dim(x, P)
 
 
 class PartToJointFusion(nn.Module):
@@ -63,7 +65,8 @@ class PartToJointFusion(nn.Module):
     def forward(self, part_x):
         # part_x: (N, C, T, 6)
         # joint_x: (N, C, T, 18)
-        return torch.einsum('vp,nctp->nctv', self.Q.to(dtype=part_x.dtype), part_x)
+        Q = self.Q.to(dtype=part_x.dtype, device=part_x.device)
+        return apply_linear_to_last_dim(part_x, Q)
 
 
 class HierarchicalPartBranch(nn.Module):
@@ -102,3 +105,5 @@ class HierarchicalPartBranch(nn.Module):
         part_x = self.part_tcn(part_x)
         joint_part_x = self.part_to_joint(part_x)
         return x + self.gamma_part.to(dtype=x.dtype, device=x.device) * joint_part_x
+
+

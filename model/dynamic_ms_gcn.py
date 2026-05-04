@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 sys.path.insert(0, '')
 
 import math
@@ -8,6 +8,11 @@ import torch.nn as nn
 
 from graph.tools import k_adjacency, normalize_adjacency_matrix
 from model.mlp import MLP
+from model.onnx_compatible_ops import (
+    apply_dynamic_adjacency,
+    apply_static_adjacency_multi_scale,
+    compute_dynamic_adjacency_matmul,
+)
 
 
 class DynamicMultiScale_GraphConv(nn.Module):
@@ -84,7 +89,7 @@ class DynamicMultiScale_GraphConv(nn.Module):
         q = self.theta(feat).reshape(N, self.num_groups, self.hidden_channels, V)
         k = self.phi(feat).reshape(N, self.num_groups, self.hidden_channels, V)
 
-        A_dyn = torch.einsum('ngcv,ngcu->ngvu', q, k) / math.sqrt(self.hidden_channels)
+        A_dyn = compute_dynamic_adjacency_matmul(q, k) / math.sqrt(self.hidden_channels)
         A_dyn = torch.where(torch.isfinite(A_dyn), A_dyn, torch.zeros_like(A_dyn))
 
         if self.dynamic_softmax:
@@ -101,12 +106,12 @@ class DynamicMultiScale_GraphConv(nn.Module):
         if self.use_mask:
             A_static = A_static + self.A_res.to(dtype=x.dtype, device=x.device)
 
-        static_support = torch.einsum('kvu,nctu->nkctv', A_static, x)
+        static_support = apply_static_adjacency_multi_scale(x, A_static)
 
         if self.dynamic:
             A_dyn = self._compute_dynamic_adjacency(x)
             x_group = x.reshape(N, self.num_groups, self.group_channels, T, V)
-            dynamic_support = torch.einsum('ngvu,ngctu->ngctv', A_dyn, x_group)
+            dynamic_support = apply_dynamic_adjacency(x_group, A_dyn)
             dynamic_support = dynamic_support.reshape(N, C, T, V)
             dynamic_support = dynamic_support.unsqueeze(1).expand(-1, self.num_scales, -1, -1, -1)
             gamma = self.gamma.to(dtype=x.dtype, device=x.device)
@@ -125,3 +130,5 @@ if __name__ == "__main__":
     A_binary = graph.A_binary
     msgcn = DynamicMultiScale_GraphConv(num_scales=15, in_channels=3, out_channels=64, A_binary=A_binary)
     msgcn.forward(torch.randn(16, 3, 30, 25))
+
+

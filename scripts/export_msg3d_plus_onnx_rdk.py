@@ -250,6 +250,28 @@ def run_onnx_check(onnx_path: str, wrapper: nn.Module, dummy: torch.Tensor) -> N
         print("[WARNING] ONNX numerical difference is larger than expected.")
 
 
+def validate_exported_onnx(onnx_path: str, expected_opset: int = 11) -> None:
+    try:
+        import onnx
+    except ImportError as exc:
+        raise ImportError("onnx is required to validate exported model. Install with: pip install onnx") from exc
+
+    model = onnx.load(onnx_path)
+    opset_by_domain = {item.domain: int(item.version) for item in model.opset_import}
+    ai_onnx_opset = opset_by_domain.get("", None)
+    has_einsum = any(node.op_type == "Einsum" for node in model.graph.node)
+
+    print(f"onnx ai.onnx opset: {ai_onnx_opset}")
+    print(f"contains Einsum node: {has_einsum}")
+
+    if ai_onnx_opset != expected_opset:
+        raise RuntimeError(f"Expected ai.onnx opset {expected_opset}, got {ai_onnx_opset}")
+    if has_einsum:
+        raise RuntimeError("Exported ONNX graph contains Einsum node, incompatible with opset11 target flow.")
+
+    print("[PASS] ONNX graph check passed (opset and node type constraints).")
+
+
 def main() -> None:
     args = parse_args()
 
@@ -328,7 +350,11 @@ def main() -> None:
             dynamic_axes=None,
             do_constant_folding=True,
             opset_version=args.opset,
+            dynamo=False,
+            external_data=False,
         )
+
+    validate_exported_onnx(args.output, expected_opset=args.opset)
 
     print("Model class from config:")
     print(f"    {model_class_path}")

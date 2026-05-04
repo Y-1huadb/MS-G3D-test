@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 sys.path.insert(0, '')
 
 import torch
@@ -9,6 +9,7 @@ import numpy as np
 from model.ms_tcn import MultiScale_TemporalConv as MS_TCN
 from model.mlp import MLP
 from model.activation import activation_factory
+from model.onnx_compatible_ops import apply_flat_adjacency
 from graph.tools import k_adjacency, normalize_adjacency_matrix
 
 
@@ -100,10 +101,12 @@ class SpatialTemporal_MS_GCN(nn.Module):
 
         # Perform Graph Convolution
         res = self.residual(x)
-        agg = torch.einsum('vu,nctu->nctv', A, x)
+        agg = apply_flat_adjacency(x, A)
         agg = agg.view(N, C, T, self.num_scales, V)
         agg = agg.permute(0,3,1,2,4).contiguous().view(N, self.num_scales*C, T, V)
         out = self.mlp(agg)
         out += res
         return self.act(out)
+
+
 
